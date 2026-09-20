@@ -11,14 +11,21 @@ import {
 } from "recharts";
 import { storage } from "./storage";
 import { supabase, supabaseNoSession, callEdgeFunction } from "./supabaseClient";
+import { LOGO_SRC } from "./logo";
 
 /* ----------------------------- constants ----------------------------- */
 
-const NAVY = "#0B2540";
-const TEAL = "#0E7C7B";
+// Brand palette — sampled from the company logo (bright red #DE2026).
+// NAVY/TEAL variable names are kept as-is internally to avoid touching every
+// usage site across the file, but their actual values now reflect the new
+// red/charcoal brand rather than the old navy/teal look.
+const NAVY = "#1E2530";   // dark charcoal — headings, structural text (was navy blue)
+const TEAL = "#DE2026";   // brand red — primary buttons, links, active states (was teal)
 const AMBER = "#C97A2B";
-const RED = "#B3432B";
+const RED = "#C2410C";    // burnt orange — reject/delete/error, kept distinct from brand red
 const SLATE = "#5B6B79";
+
+// Company logo, embedded so the app never depends on an external image host.
 
 const WORKFLOW = [
   { status: "Received at Site", holder: "Site Billing Engineer", stage: "Site Checking" },
@@ -362,7 +369,7 @@ function seedBills() {
 
 function StatCard({ icon: Icon, label, value, color, sub }) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-center justify-between shadow-sm">
+    <div className="bg-white rounded-2xl border border-slate-200 p-5 flex items-center justify-between shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200">
       <div>
         <div className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">{label}</div>
         <div className="text-2xl font-bold mt-1" style={{ color: NAVY }}>{value}</div>
@@ -387,7 +394,7 @@ function Badge({ status }) {
 
 function SectionCard({ title, icon: Icon, action, children, className = "" }) {
   return (
-    <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${className}`}>
+    <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow duration-200 ${className}`}>
       <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
         <div className="flex items-center gap-2">
           {Icon && <Icon size={16} className="text-slate-500" />}
@@ -411,7 +418,7 @@ function Field({ label, required, children }) {
   );
 }
 
-const inputCls = "w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0E7C7B]/40 focus:border-[#0E7C7B]";
+const inputCls = "w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#DE2026]/30 focus:border-[#DE2026] transition-colors";
 
 /* ------------------------------ Sidebar -------------------------------- */
 
@@ -424,9 +431,7 @@ function Sidebar({ open, onClose, active, setActive, canSeeUsers }) {
         ${open ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}>
         <div className="flex items-center justify-between px-5 py-5 border-b border-slate-100">
           <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: NAVY }}>
-              <FileStack size={18} color="white" />
-            </div>
+            <img src={LOGO_SRC} alt="Logo" className="h-9 w-9 rounded-full shrink-0 shadow-sm" />
             <div>
               <div className="font-bold text-sm leading-tight" style={{ color: NAVY }}>BillTrack Pro</div>
               <div className="text-[11px] text-slate-400 leading-tight">Contractor Bill Tracking</div>
@@ -440,9 +445,9 @@ function Sidebar({ open, onClose, active, setActive, canSeeUsers }) {
             const isActive = active === item.id;
             return (
               <button key={item.id} onClick={() => { setActive(item.id); onClose(); }}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors
-                  ${isActive ? "text-white" : "text-slate-600 hover:bg-slate-50"}`}
-                style={isActive ? { backgroundColor: NAVY } : {}}>
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all duration-150
+                  ${isActive ? "text-white shadow-sm" : "text-slate-600 hover:bg-red-50 hover:text-slate-800"}`}
+                style={isActive ? { backgroundColor: TEAL } : {}}>
                 <Icon size={17} />
                 {item.label}
               </button>
@@ -464,6 +469,7 @@ function Header({ onMenu, notifications, onOpenNotification, userEmail, onLogout
       <div className="flex items-center justify-between px-5 py-3.5">
         <div className="flex items-center gap-3">
           <button className="lg:hidden text-slate-500" onClick={onMenu}><Menu size={22} /></button>
+          <img src={LOGO_SRC} alt="Logo" className="h-8 w-8 rounded-full shrink-0 lg:hidden" />
           <div className="hidden lg:block">
             <div className="font-bold text-base" style={{ color: NAVY }}>BillTrack Pro</div>
             <div className="text-xs text-slate-400">Contractor Bill Tracking System</div>
