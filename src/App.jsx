@@ -120,7 +120,7 @@ const makeDefaultUsers = () => DEFAULT_USERS_SEED.map(u => ({ id: uid(), ...u, p
 // typo like "admin" vs "Admin" vs "Super  Admin". "Other" reveals a text box
 // for anything that genuinely doesn't fit (won't get special app permissions,
 // but is still useful for the directory).
-const DESIGNATION_OPTIONS = ["Super Admin", "Site Billing Engineer", "Runner", "HO Billing Engineer", "Admin", "Accounts", "Other"];
+const DESIGNATION_OPTIONS = ["Director", "Super Admin", "Site Billing Engineer", "Head Office Reception", "Head Office Billing Engineer", "Billing Manager", "Accountant", "Other"];
 
 function ageingBucket(days) {
   if (days <= 3) return "0-3 Days";
@@ -155,12 +155,41 @@ function isOpenBill(bill) {
 // "Admin", " Admin " should all count as the same role rather than silently
 // failing to match because of how someone happened to type it.
 const normalizeRole = (s) => (s || "").trim().toLowerCase();
-const isSuperAdmin = (designation) => normalizeRole(designation) === "super admin";
+// "Super Admin" and "Director" both get full, unrestricted access — the
+// table's own wording for Director is "All Rights with all invoice access".
+const isSuperAdmin = (designation) => {
+  const n = normalizeRole(designation);
+  return n === "super admin" || n === "director";
+};
 const rolesMatch = (a, b) => normalizeRole(a) === normalizeRole(b) && normalizeRole(a) !== "";
 // "Accounts" is the last stop in the workflow — once someone in Accounts
 // accepts a bill, there's nobody further to transfer it to. Instead they add
 // a closing remark and mark the bill Paid/closed directly.
-const isTerminalRole = (designation) => rolesMatch(designation, "Accounts");
+// "Accountant" is the current name; "Accounts" kept as an alias so any
+// existing data using the old label still gets treated as the terminal role.
+const isTerminalRole = (designation) => {
+  const n = normalizeRole(designation);
+  return n === "accountant" || n === "accounts";
+};
+
+// Per-role page access, taken directly from the access table:
+// - "Contractor add" -> Contractors page
+// - "New invoice Registration" -> Register New Bill page
+// - "Report" -> Reports page
+// Roles not listed here (Head Office Reception, Accountant) get none of these.
+const CAN_REGISTER_BILLS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager"];
+const CAN_SEE_REPORTS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager"];
+const CAN_MANAGE_CONTRACTORS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager"];
+const CAN_SEE_MANAGEMENT_DASHBOARD = ["super admin", "director"];
+
+// Turn-around-time targets (in days) per role, for the Performance report.
+const TAT_TARGETS = {
+  "site billing engineer": 7,
+  "head office billing engineer": 3,
+  "billing manager": 3,
+  "accountant": 7,
+  "accounts": 7,
+};
 
 // Is this bill actually sitting with Accounts right now (not just "somewhere
 // in the workflow")? Used to gate the Accounts delay-warning notification so
@@ -422,8 +451,15 @@ const inputCls = "w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm 
 
 /* ------------------------------ Sidebar -------------------------------- */
 
-function Sidebar({ open, onClose, active, setActive, canSeeUsers }) {
-  const items = canSeeUsers ? NAV_ITEMS : NAV_ITEMS.filter(item => item.id !== "users");
+function Sidebar({ open, onClose, active, setActive, canSeeUsers, canRegisterBills, canSeeReports, canManageContractors, canSeeManagementDashboard }) {
+  const items = NAV_ITEMS.filter(item => {
+    if (item.id === "users") return canSeeUsers;
+    if (item.id === "new-bill") return canRegisterBills;
+    if (item.id === "reports") return canSeeReports;
+    if (item.id === "contractors") return canManageContractors;
+    if (item.id === "management") return canSeeManagementDashboard;
+    return true;
+  });
   return (
     <>
       {open && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={onClose} />}
@@ -1064,13 +1100,16 @@ const REPORT_TABS = [
   { id: "payment", label: "Payment Report", icon: IndianRupee },
   { id: "delay", label: "Department/Stage Delay Report", icon: History },
   { id: "activity", label: "User Activity Report", icon: Users },
+  { id: "performance", label: "Performance / TAT Report", icon: ShieldCheck },
 ];
 
-function Reports({ bills, users }) {
+function Reports({ bills, users, canSeePerformance }) {
   const [tab, setTab] = useState("register");
   const [projectFilter, setProjectFilter] = useState("All");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+
+  const visibleTabs = canSeePerformance ? REPORT_TABS : REPORT_TABS.filter(t => t.id !== "performance");
 
   const projectOptions = useMemo(() => {
     const names = Array.from(new Set(bills.map(b => b.site).filter(Boolean))).sort();
@@ -1126,7 +1165,7 @@ function Reports({ bills, users }) {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {REPORT_TABS.map(t => {
+        {visibleTabs.map(t => {
           const Icon = t.icon; const isActive = tab === t.id;
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -1147,6 +1186,7 @@ function Reports({ bills, users }) {
       {tab === "payment" && <PaymentReport bills={filteredBills} />}
       {tab === "delay" && <DelayReport bills={filteredBills} />}
       {tab === "activity" && <ActivityReport bills={filteredBills} />}
+      {tab === "performance" && canSeePerformance && <PerformanceReport bills={filteredBills} users={users} />}
     </div>
   );
 }
@@ -1373,6 +1413,64 @@ function ActivityReport({ bills }) {
   return <ReportShell title="User Activity Report" count={events.length} onExport={() => downloadCsv("user-activity.csv", cols, events.map(h => [h.user, h.billId, fmtDate(h.date), fmtTime(h.date), h.prevStatus || "-", h.newStatus, h.remarks || ""]))}>
     <Table cols={cols} rows={rows} />
   </ReportShell>;
+}
+
+// Performance / TAT report — how fast is each person actually handling bills,
+// compared with the turn-around-time target for their role (7/3/3/7 days).
+// For each pair of consecutive history entries on a bill, the gap between
+// them is counted as "how long it took the person in the SECOND entry to
+// act" — i.e. once it became their turn, how many days did they take.
+function PerformanceReport({ bills, users }) {
+  const stats = useMemo(() => {
+    const map = {}; // user name -> { role, totalDays, count }
+    bills.forEach(b => {
+      const h = b.history;
+      for (let i = 0; i < h.length - 1; i++) {
+        const actor = h[i + 1].user;
+        const role = h[i + 1].role;
+        const days = (h[i + 1].date - h[i].date) / 86400000;
+        if (!actor || days < 0) continue;
+        if (!map[actor]) map[actor] = { role, totalDays: 0, count: 0 };
+        map[actor].totalDays += days;
+        map[actor].count += 1;
+      }
+    });
+    return Object.entries(map).map(([name, v]) => {
+      const avg = v.count ? v.totalDays / v.count : 0;
+      const target = TAT_TARGETS[normalizeRole(v.role)];
+      return {
+        name, role: v.role, billsHandled: v.count,
+        avgDays: Math.round(avg * 10) / 10,
+        target: target || null,
+        onTrack: target ? avg <= target : null,
+      };
+    }).sort((a, b) => (b.target ? b.avgDays - b.target : 0) - (a.target ? a.avgDays - a.target : 0));
+  }, [bills]);
+
+  const cols = ["User", "Designation", "Bills Handled", "Avg. Days per Bill", "TAT Target", "Status"];
+  const rows = stats.map(s => [
+    s.name, s.role, s.billsHandled, s.avgDays + "d",
+    s.target ? s.target + "d" : "—",
+    s.target == null ? <span key={s.name} className="text-slate-300">—</span> : (
+      <span key={s.name} className={`font-semibold ${s.onTrack ? "text-green-600" : "text-red-600"}`}>
+        {s.onTrack ? "On Track" : "Over TAT"}
+      </span>
+    ),
+  ]);
+
+  return (
+    <ReportShell
+      title="Performance / TAT Report"
+      count={stats.length}
+      onExport={() => downloadCsv("performance-tat.csv", cols, stats.map(s => [s.name, s.role, s.billsHandled, s.avgDays, s.target || "", s.target == null ? "" : (s.onTrack ? "On Track" : "Over TAT")]))}
+    >
+      <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+        Turn-around-time targets: Site Billing Engineer 7 days · Head Office Billing Engineer 3 days · Billing Manager 3 days · Accountant 7 days.
+        "Avg. Days per Bill" is how long it typically takes that person to act once a bill reaches them.
+      </div>
+      <Table cols={cols} rows={rows} />
+    </ReportShell>
+  );
 }
 
 /* --------------------------- Management Dashboard ------------------------ */
@@ -2277,17 +2375,47 @@ export default function App({ user, onLogout }) {
   const superAdminConfigured = users.some(u => isSuperAdmin(u.designation) && u.email);
   const canSeeUsers = isSuperAdmin(profile?.designation) || !superAdminConfigured;
 
+  // Per-role page access (from the access table). If someone's logged in but
+  // isn't matched to a directory profile yet, default to letting them in —
+  // safer than accidentally locking out an admin mid-setup. Only the
+  // Management Dashboard defaults closed for an unmatched profile, since it's
+  // company-wide data and there's no bootstrap reason to show it early.
+  const role = normalizeRole(profile?.designation);
+  const canRegisterBills = !profile || CAN_REGISTER_BILLS.includes(role);
+  const canSeeReports = !profile || CAN_SEE_REPORTS.includes(role);
+  const canManageContractors = !profile || CAN_MANAGE_CONTRACTORS.includes(role);
+  const canSeeManagementDashboard = !!profile && CAN_SEE_MANAGEMENT_DASHBOARD.includes(role);
+
+  // What the Dashboard should actually show, per the access table:
+  // - Super Admin / Director: everything.
+  // - Site Billing Engineer: what they registered themselves, PLUS whatever
+  //   is currently assigned to them (covers both "received via transfer" and
+  //   "received back after being rejected", since both land as assignedTo).
+  // - Everyone else (Reception, HO Billing Engineer, Billing Manager,
+  //   Accountant): only what's currently assigned to them.
+  const dashboardBills = useMemo(() => {
+    if (!profile || isSuperAdmin(profile.designation)) return bills;
+    if (role === "site billing engineer") {
+      return bills.filter(b => b.registeredBy === profile.id || b.assignedTo === profile.id);
+    }
+    return bills.filter(b => b.assignedTo === profile.id);
+  }, [bills, profile, role]);
+
   if (!loaded) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Loading BillTrack Pro…</div>;
   }
 
   return (
     <div className="min-h-screen bg-slate-50 flex" style={{ fontFamily: "Inter, ui-sans-serif, system-ui" }}>
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} active={active} setActive={(id) => { setActive(id); setOpenBillId(null); }} canSeeUsers={canSeeUsers} />
+      <Sidebar
+        open={sidebarOpen} onClose={() => setSidebarOpen(false)} active={active} setActive={(id) => { setActive(id); setOpenBillId(null); }}
+        canSeeUsers={canSeeUsers} canRegisterBills={canRegisterBills} canSeeReports={canSeeReports}
+        canManageContractors={canManageContractors} canSeeManagementDashboard={canSeeManagementDashboard}
+      />
       <div className="flex-1 min-w-0 flex flex-col">
         <Header onMenu={() => setSidebarOpen(true)} notifications={notifications} onOpenNotification={handleOpenNotification} userEmail={user?.email} onLogout={onLogout} />
         <main className="flex-1 p-4 sm:p-6 max-w-[1400px] w-full mx-auto">
-          {active === "dashboard" && <Dashboard bills={bills} setActive={setActive} userEmail={user?.email} />}
+          {active === "dashboard" && <Dashboard bills={dashboardBills} setActive={setActive} userEmail={user?.email} />}
           {active === "bills" && !openBill && (
             <AllBills
               bills={bills} onOpen={setOpenBillId} setActive={setActive} onDelete={handleDeleteBill}
@@ -2300,11 +2428,15 @@ export default function App({ user, onLogout }) {
               profile={profile} users={users} onAccept={handleAcceptBill} onReject={handleRejectBill} onTransfer={handleTransferBill} onClose={handleCloseBill}
             />
           )}
-          {active === "new-bill" && <RegisterBill onCreate={handleCreate} nextId={makeBillId(bills.length + 1)} contractors={contractors} sites={projects} />}
-          {active === "reports" && <Reports bills={bills} users={users} />}
-          {active === "management" && <ManagementDashboard bills={bills} users={users} />}
+          {active === "new-bill" && canRegisterBills && <RegisterBill onCreate={handleCreate} nextId={makeBillId(bills.length + 1)} contractors={contractors} sites={projects} />}
+          {active === "reports" && canSeeReports && <Reports bills={bills} users={users} canSeePerformance={canSeeManagementDashboard} />}
+          {active === "management" && canSeeManagementDashboard && <ManagementDashboard bills={bills} users={users} />}
           {active === "users" && canSeeUsers && <UsersManager users={users} onAdd={addUser} onDelete={deleteUser} onSendReset={sendPasswordReset} currentUserEmail={user?.email} superAdminConfigured={superAdminConfigured} />}
-          {active === "users" && !canSeeUsers && (
+          {((active === "users" && !canSeeUsers) ||
+            (active === "new-bill" && !canRegisterBills) ||
+            (active === "reports" && !canSeeReports) ||
+            (active === "management" && !canSeeManagementDashboard) ||
+            (active === "contractors" && !canManageContractors)) && (
             <div className="text-sm text-slate-500">You don't have access to this page.</div>
           )}
           {active === "projects" && (
@@ -2314,7 +2446,7 @@ export default function App({ user, onLogout }) {
               items={projects} onAdd={addProject} onDelete={deleteProject}
             />
           )}
-          {active === "contractors" && (
+          {active === "contractors" && canManageContractors && (
             <ContractorsManager contractors={contractors} onAdd={addContractor} onDelete={deleteContractor} />
           )}
           {active === "holidays" && <SimpleListPage title="Holidays" sub="Excluded from working-day pending calculations" icon={CalendarDays}
