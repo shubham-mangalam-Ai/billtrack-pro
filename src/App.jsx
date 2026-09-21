@@ -10,7 +10,7 @@ import {
   Tooltip, Legend, CartesianGrid, LineChart, Line
 } from "recharts";
 import { storage } from "./storage";
-import { supabase, supabaseNoSession, callEdgeFunction } from "./supabaseClient";
+import { supabase, supabaseNoSession, callEdgeFunction, uploadBillDocument } from "./supabaseClient";
 import { LOGO_SRC } from "./logo";
 
 /* ----------------------------- constants ----------------------------- */
@@ -809,17 +809,56 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
     grossAmount: "", gst: "", tds: "", otherDeductions: "", submittedBy: "", remarks: "",
   });
   const [error, setError] = useState("");
+  const [files, setFiles] = useState([]); // File objects, not yet uploaded
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState(""); // shown while uploading
+  const fileInputRef = React.useRef(null);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const net = (Number(form.grossAmount) || 0) + (Number(form.gst) || 0) - (Number(form.tds) || 0) - (Number(form.otherDeductions) || 0);
 
-  const submit = (e) => {
+  const addFiles = (fileList) => {
+    const incoming = Array.from(fileList);
+    setFiles(prev => [...prev, ...incoming]);
+  };
+  const removeFile = (index) => setFiles(prev => prev.filter((_, i) => i !== index));
+
+  const submit = async (e) => {
     e.preventDefault();
     if (!form.contractor || !form.site) {
       setError("Please select a Contractor and a Site before submitting.");
       return;
     }
     setError("");
-    onCreate({ ...form, grossAmount: Number(form.grossAmount) || 0, gst: Number(form.gst) || 0, tds: Number(form.tds) || 0, otherDeductions: Number(form.otherDeductions) || 0, netAmount: net });
+
+    let uploadedDocs = [];
+    if (files.length > 0) {
+      setUploading(true);
+      try {
+        for (let i = 0; i < files.length; i++) {
+          setUploadStatus(`Uploading ${files[i].name} (${i + 1}/${files.length})…`);
+          try {
+            const doc = await uploadBillDocument(files[i], nextId);
+            uploadedDocs.push(doc);
+          } catch (innerErr) {
+            innerErr.fileName = files[i].name;
+            throw innerErr;
+          }
+        }
+      } catch (err) {
+        setUploading(false);
+        setUploadStatus("");
+        setError(
+          `Couldn't upload "${err.fileName || "a file"}": ${err.message || "unknown error"}. ` +
+          `If this keeps happening, check that a Storage bucket named "bill-documents" exists in Supabase (set to public) and try again.`
+        );
+        return;
+      }
+      setUploading(false);
+      setUploadStatus("");
+    }
+
+    onCreate({ ...form, grossAmount: Number(form.grossAmount) || 0, gst: Number(form.gst) || 0, tds: Number(form.tds) || 0, otherDeductions: Number(form.otherDeductions) || 0, netAmount: net, documents: uploadedDocs });
   };
 
   return (
@@ -872,9 +911,45 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
 
         <SectionCard title="Documents & Remarks" icon={Paperclip}>
           <Field label="Remarks"><textarea rows={3} className={inputCls} value={form.remarks} onChange={e => set("remarks", e.target.value)} /></Field>
-          <div className="mt-4 border-2 border-dashed border-slate-200 rounded-xl py-8 text-center text-sm text-slate-400">
-            Drop Bill PDF, Measurement Sheet, Abstract, Work Order/PO, or other supporting documents here
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+            className="hidden"
+            onChange={(e) => { if (e.target.files.length) addFiles(e.target.files); e.target.value = ""; }}
+          />
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+            }}
+            className={`mt-4 border-2 border-dashed rounded-xl py-8 text-center text-sm cursor-pointer transition-colors
+              ${dragOver ? "border-red-300 bg-red-50 text-red-500" : "border-slate-200 text-slate-400 hover:bg-slate-50"}`}
+          >
+            Click, or drop Bill PDF, Measurement Sheet, Abstract, Work Order/PO, or other supporting documents here
           </div>
+
+          {files.length > 0 && (
+            <ul className="mt-3 space-y-2">
+              {files.map((f, i) => (
+                <li key={i} className="flex items-center justify-between gap-2 text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                  <span className="flex items-center gap-2 min-w-0 text-slate-600">
+                    <Paperclip size={14} className="text-slate-400 shrink-0" />
+                    <span className="truncate">{f.name}</span>
+                    <span className="text-xs text-slate-400 shrink-0">({Math.round(f.size / 1024)} KB)</span>
+                  </span>
+                  <button type="button" onClick={() => removeFile(i)} className="text-slate-400 hover:text-red-600 shrink-0">
+                    <X size={15} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </SectionCard>
 
         {error && (
@@ -883,8 +958,14 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
           </div>
         )}
 
-        <button type="submit" className="w-full sm:w-auto px-6 py-3 rounded-xl text-white font-semibold text-sm" style={{ backgroundColor: NAVY }}>
-          Register Bill at Site
+        {uploading && (
+          <div className="text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5">
+            {uploadStatus}
+          </div>
+        )}
+
+        <button type="submit" disabled={uploading} className="w-full sm:w-auto px-6 py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-60" style={{ backgroundColor: NAVY }}>
+          {uploading ? "Uploading…" : "Register Bill at Site"}
         </button>
       </form>
     </div>
@@ -1067,9 +1148,24 @@ function BillDetail({ bill, onBack, onTransition, onDelete, profile, users, onAc
           <SectionCard title="Documents" icon={Paperclip}>
             {bill.documents.length === 0 ? <Empty /> : (
               <ul className="space-y-2 text-sm">
-                {bill.documents.map(d => (
-                  <li key={d} className="flex items-center gap-2 text-slate-600"><FileText size={14} className="text-slate-400" /> {d}</li>
-                ))}
+                {bill.documents.map((d, i) => {
+                  // New uploads are {name, url, size}; older/seed data may
+                  // just be a plain filename string with no real file behind
+                  // it — show those as plain text instead of a broken link.
+                  const isReal = d && typeof d === "object" && d.url;
+                  return (
+                    <li key={i} className="flex items-center gap-2 text-slate-600">
+                      <FileText size={14} className="text-slate-400 shrink-0" />
+                      {isReal ? (
+                        <a href={d.url} target="_blank" rel="noopener noreferrer" className="hover:underline truncate" style={{ color: TEAL }}>
+                          {d.name}
+                        </a>
+                      ) : (
+                        <span className="truncate">{typeof d === "string" ? d : d.name}</span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </SectionCard>
@@ -2171,7 +2267,7 @@ export default function App({ user, onLogout }) {
       billType: form.billType, billDate: new Date(form.billDate).getTime(), billPeriod: form.billPeriod,
       grossAmount: form.grossAmount, gst: form.gst, tds: form.tds, otherDeductions: form.otherDeductions,
       netAmount: form.netAmount, dateReceived: now, submittedBy: form.submittedBy || "Site Billing Engineer",
-      remarks: form.remarks, documents: [], status: "Received at Site",
+      remarks: form.remarks, documents: form.documents || [], status: "Received at Site",
       history: [{ user: form.submittedBy || "Site Billing Engineer", role: "Site Billing Engineer", date: now, prevStatus: null, newStatus: "Received at Site", remarks: "Bill registered at site." }],
       payment: null, assignedTo: null, awaitingTransfer: false,
       registeredBy,

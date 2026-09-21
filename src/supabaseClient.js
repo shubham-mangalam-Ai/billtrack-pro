@@ -46,3 +46,21 @@ export async function callEdgeFunction(name, body) {
   if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
   return json;
 }
+
+// Uploads a real file (PDF, image, etc.) to a Supabase Storage bucket called
+// "bill-documents" and returns a public URL for it. The bucket must exist
+// (created once, from the Supabase dashboard) before this will work — see
+// the setup notes shared alongside this file. Files are stored under
+// <billId>/<timestamp>-<filename> so re-uploading the same filename for a
+// different bill never collides.
+export async function uploadBillDocument(file, billId) {
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `${billId}/${Date.now()}-${safeName}`;
+  const { error } = await supabase.storage.from("bill-documents").upload(path, file, {
+    cacheControl: "3600",
+    upsert: false,
+  });
+  if (error) throw error;
+  const { data } = supabase.storage.from("bill-documents").getPublicUrl(path);
+  return { name: file.name, url: data.publicUrl, path, size: file.size };
+}
