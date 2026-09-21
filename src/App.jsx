@@ -458,6 +458,7 @@ function Sidebar({ open, onClose, active, setActive, canSeeUsers, canRegisterBil
     if (item.id === "reports") return canSeeReports;
     if (item.id === "contractors") return canManageContractors;
     if (item.id === "management") return canSeeManagementDashboard;
+    if (item.id === "holidays" || item.id === "settings" || item.id === "guide") return canSeeManagementDashboard;
     return true;
   });
   return (
@@ -2436,7 +2437,8 @@ export default function App({ user, onLogout }) {
             (active === "new-bill" && !canRegisterBills) ||
             (active === "reports" && !canSeeReports) ||
             (active === "management" && !canSeeManagementDashboard) ||
-            (active === "contractors" && !canManageContractors)) && (
+            (active === "contractors" && !canManageContractors) ||
+            ((active === "holidays" || active === "settings" || active === "guide") && !canSeeManagementDashboard)) && (
             <div className="text-sm text-slate-500">You don't have access to this page.</div>
           )}
           {active === "projects" && (
@@ -2449,11 +2451,11 @@ export default function App({ user, onLogout }) {
           {active === "contractors" && canManageContractors && (
             <ContractorsManager contractors={contractors} onAdd={addContractor} onDelete={deleteContractor} />
           )}
-          {active === "holidays" && <SimpleListPage title="Holidays" sub="Excluded from working-day pending calculations" icon={CalendarDays}
+          {active === "holidays" && canSeeManagementDashboard && <SimpleListPage title="Holidays" sub="Excluded from working-day pending calculations" icon={CalendarDays}
             items={["26 Jan 2026 — Republic Day", "15 Aug 2026 — Independence Day", "02 Oct 2026 — Gandhi Jayanti", "25 Dec 2026 — Christmas"]} />}
-          {active === "settings" && <SimpleListPage title="Settings" sub="System configuration" icon={Settings}
+          {active === "settings" && canSeeManagementDashboard && <SimpleListPage title="Settings" sub="System configuration" icon={Settings}
             items={["Bill ID prefix: ML-2026-", "Escalation: reminder at 3 days, warning at 7 days, escalate at 15 days", "Currency: INR (₹)", "Session timeout: 30 minutes"]} />}
-          {active === "guide" && <GuidePage />}
+          {active === "guide" && canSeeManagementDashboard && <GuidePage />}
         </main>
       </div>
     </div>
