@@ -21,7 +21,7 @@ function SetNewPasswordScreen({ onDone }) {
       return;
     }
     if (password !== confirm) {
-      setError("Passwords don\u2019t match.");
+      setError("Passwords don’t match.");
       return;
     }
     setBusy(true);

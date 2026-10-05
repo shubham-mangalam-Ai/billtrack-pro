@@ -81,7 +81,7 @@ const NAV_ITEMS = [
   { id: "management", label: "Management Dashboard", icon: ShieldCheck },
   { id: "users", label: "Users", icon: Users },
   { id: "projects", label: "Projects", icon: Building2 },
-  { id: "contractors", label: "Contractors", icon: Truck },
+  { id: "contractors", label: "Vendors / Contractors", icon: Truck },
   { id: "holidays", label: "Holidays", icon: CalendarDays },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "guide", label: "User Guide", icon: HelpCircle },
@@ -120,7 +120,7 @@ const makeDefaultUsers = () => DEFAULT_USERS_SEED.map(u => ({ id: uid(), ...u, p
 // typo like "admin" vs "Admin" vs "Super  Admin". "Other" reveals a text box
 // for anything that genuinely doesn't fit (won't get special app permissions,
 // but is still useful for the directory).
-const DESIGNATION_OPTIONS = ["Director", "Super Admin", "Site Billing Engineer", "Head Office Reception", "Head Office Billing Engineer", "Billing Manager", "Accountant", "Other"];
+const DESIGNATION_OPTIONS = ["Director", "Super Admin", "Site Billing Engineer", "Head Office Reception", "Head Office Billing Engineer", "Billing Manager", "Accountant", "Admin", "Site Reception", "Store Keeper", "Purchase Officer", "Other"];
 
 function ageingBucket(days) {
   if (days <= 3) return "0-3 Days";
@@ -177,9 +177,9 @@ const isTerminalRole = (designation) => {
 // - "New invoice Registration" -> Register New Bill page
 // - "Report" -> Reports page
 // Roles not listed here (Head Office Reception, Accountant) get none of these.
-const CAN_REGISTER_BILLS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager"];
+const CAN_REGISTER_BILLS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager", "admin", "site reception", "store keeper", "purchase officer"];
 const CAN_SEE_REPORTS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager"];
-const CAN_MANAGE_CONTRACTORS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager"];
+const CAN_MANAGE_CONTRACTORS = ["super admin", "director", "site billing engineer", "head office billing engineer", "billing manager", "admin", "site reception", "store keeper", "purchase officer"];
 const CAN_SEE_MANAGEMENT_DASHBOARD = ["super admin", "director"];
 
 // Turn-around-time targets (in days) per role, for the Performance report.
@@ -684,7 +684,7 @@ function AllBills({ bills, onOpen, setActive, onDelete, profile, users, onAccept
   });
 
   const exportCsv = () => {
-    const header = ["Bill ID", "Contractor", "Site", "Bill Type", "Bill Date", "Net Amount", "Status", "Current Holder", "Days Pending"];
+    const header = ["Bill ID", "Vendor/Contractor", "Site", "Bill Type", "Bill Date", "Net Amount", "Status", "Current Holder", "Days Pending"];
     const rows = filtered.map(b => [b.id, b.contractor, b.site, b.billType, fmtDate(b.billDate), b.netAmount, b.status, holderDisplay(b, users), daysBetween(b.dateReceived, Date.now())]);
     downloadCsv("all-bills.csv", header, rows);
   };
@@ -719,7 +719,7 @@ function AllBills({ bills, onOpen, setActive, onDelete, profile, users, onAccept
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
         <div className="relative">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by Bill ID, Contractor, Bill Number, Work Order, PO, Site, Status..."
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by Bill ID, Vendor/Contractor, Bill Number, Work Order, PO, Site, Status..."
             className={inputCls + " pl-9"} />
         </div>
         {showFilters && (
@@ -742,7 +742,7 @@ function AllBills({ bills, onOpen, setActive, onDelete, profile, users, onAccept
               <thead>
                 <tr className="text-left text-[11px] uppercase text-slate-400 border-b border-slate-100">
                   <th className="px-5 py-3 font-semibold">Bill ID</th>
-                  <th className="px-5 py-3 font-semibold">Contractor / Site</th>
+                  <th className="px-5 py-3 font-semibold">Vendor/Contractor / Site</th>
                   <th className="px-5 py-3 font-semibold">Amount</th>
                   <th className="px-5 py-3 font-semibold">Status</th>
                   <th className="px-5 py-3 font-semibold">Holder</th>
@@ -804,9 +804,9 @@ function downloadCsv(filename, header, rows) {
 
 function RegisterBill({ onCreate, nextId, contractors, sites }) {
   const [form, setForm] = useState({
-    contractor: "", site: "", building: "", workOrder: "", po: "", contractorBillNo: "",
-    billType: "RA Bill", billDate: new Date().toISOString().slice(0, 10), billPeriod: "",
-    grossAmount: "", gst: "", tds: "", otherDeductions: "", submittedBy: "", remarks: "",
+    contractor: "", site: "", building: "", contractorBillNo: "",
+    billType: "RA Bill", billDate: new Date().toISOString().slice(0, 10),
+    grossAmount: "", otherDeductions: "", submittedBy: "", remarks: "",
   });
   const [error, setError] = useState("");
   const [files, setFiles] = useState([]); // File objects, not yet uploaded
@@ -815,7 +815,7 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
   const [uploadStatus, setUploadStatus] = useState(""); // shown while uploading
   const fileInputRef = React.useRef(null);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const net = (Number(form.grossAmount) || 0) + (Number(form.gst) || 0) - (Number(form.tds) || 0) - (Number(form.otherDeductions) || 0);
+  const net = (Number(form.grossAmount) || 0) - (Number(form.otherDeductions) || 0);
 
   const addFiles = (fileList) => {
     const incoming = Array.from(fileList);
@@ -826,7 +826,7 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
   const submit = async (e) => {
     e.preventDefault();
     if (!form.contractor || !form.site) {
-      setError("Please select a Contractor and a Site before submitting.");
+      setError("Please select a Vendor/Contractor and a Site before submitting.");
       return;
     }
     setError("");
@@ -858,20 +858,20 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
       setUploadStatus("");
     }
 
-    onCreate({ ...form, grossAmount: Number(form.grossAmount) || 0, gst: Number(form.gst) || 0, tds: Number(form.tds) || 0, otherDeductions: Number(form.otherDeductions) || 0, netAmount: net, documents: uploadedDocs });
+    onCreate({ ...form, grossAmount: Number(form.grossAmount) || 0, otherDeductions: Number(form.otherDeductions) || 0, netAmount: net, documents: uploadedDocs });
   };
 
   return (
     <div className="max-w-3xl">
       <h1 className="text-2xl font-bold" style={{ color: NAVY }}>Register New Bill</h1>
-      <p className="text-sm text-slate-500 mt-0.5 mb-5">Create a new contractor bill entry with tracking ID · Next ID: <span className="font-mono font-semibold">{nextId}</span></p>
+      <p className="text-sm text-slate-500 mt-0.5 mb-5">Create a new vendor/contractor bill entry with tracking ID · Next ID: <span className="font-mono font-semibold">{nextId}</span></p>
 
       <form onSubmit={submit} className="space-y-6">
         <SectionCard title="Bill Details" icon={FileText}>
           <div className="grid sm:grid-cols-2 gap-4">
-            <Field label="Contractor" required>
+            <Field label="Vendor / Contractor" required>
               <select className={inputCls} value={form.contractor} onChange={e => set("contractor", e.target.value)}>
-                <option value="">Select Contractor</option>
+                <option value="">Select Vendor/Contractor</option>
                 {contractors.map(c => <option key={c.id} value={c.firmName}>{c.firmName}</option>)}
               </select>
             </Field>
@@ -882,16 +882,13 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
               </select>
             </Field>
             <Field label="Building / Wing"><input className={inputCls} value={form.building} onChange={e => set("building", e.target.value)} /></Field>
-            <Field label="Work Order Number"><input className={inputCls} value={form.workOrder} onChange={e => set("workOrder", e.target.value)} /></Field>
-            <Field label="PO Number"><input className={inputCls} value={form.po} onChange={e => set("po", e.target.value)} /></Field>
-            <Field label="Contractor Bill Number"><input className={inputCls} value={form.contractorBillNo} onChange={e => set("contractorBillNo", e.target.value)} /></Field>
+            <Field label="Vendor/Contractor Bill Number"><input className={inputCls} value={form.contractorBillNo} onChange={e => set("contractorBillNo", e.target.value)} /></Field>
             <Field label="Bill Type" required>
               <select className={inputCls} value={form.billType} onChange={e => set("billType", e.target.value)}>
                 {BILL_TYPES.map(t => <option key={t}>{t}</option>)}
               </select>
             </Field>
             <Field label="Bill Date" required><input type="date" className={inputCls} value={form.billDate} onChange={e => set("billDate", e.target.value)} /></Field>
-            <Field label="Bill Period"><input className={inputCls} placeholder="e.g. Jul 2026" value={form.billPeriod} onChange={e => set("billPeriod", e.target.value)} /></Field>
             <Field label="Submitted By"><input className={inputCls} value={form.submittedBy} onChange={e => set("submittedBy", e.target.value)} /></Field>
           </div>
         </SectionCard>
@@ -899,8 +896,6 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
         <SectionCard title="Amounts" icon={IndianRupee}>
           <div className="grid sm:grid-cols-2 gap-4">
             <Field label="Gross Bill Amount" required><input type="number" className={inputCls} value={form.grossAmount} onChange={e => set("grossAmount", e.target.value)} /></Field>
-            <Field label="GST"><input type="number" className={inputCls} value={form.gst} onChange={e => set("gst", e.target.value)} /></Field>
-            <Field label="TDS"><input type="number" className={inputCls} value={form.tds} onChange={e => set("tds", e.target.value)} /></Field>
             <Field label="Other Deductions"><input type="number" className={inputCls} value={form.otherDeductions} onChange={e => set("otherDeductions", e.target.value)} /></Field>
           </div>
           <div className="mt-4 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 flex items-center justify-between">
@@ -931,7 +926,7 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
             className={`mt-4 border-2 border-dashed rounded-xl py-8 text-center text-sm cursor-pointer transition-colors
               ${dragOver ? "border-red-300 bg-red-50 text-red-500" : "border-slate-200 text-slate-400 hover:bg-slate-50"}`}
           >
-            Click, or drop Bill PDF, Measurement Sheet, Abstract, Work Order/PO, or other supporting documents here
+            Click, or drop Bill PDF, Measurement Sheet, Abstract, or other supporting documents here
           </div>
 
           {files.length > 0 && (
@@ -1137,9 +1132,9 @@ function BillDetail({ bill, onBack, onTransition, onDelete, profile, users, onAc
         <div className="space-y-5">
           <SectionCard title="Bill Summary" icon={FileText}>
             <dl className="text-sm space-y-2.5">
-              {[["Work Order", bill.workOrder], ["PO Number", bill.po], ["Contractor Bill No.", bill.contractorBillNo],
-              ["Bill Date", fmtDate(bill.billDate)], ["Gross Amount", fmtINR(bill.grossAmount)], ["GST", fmtINR(bill.gst)],
-              ["TDS", "- " + fmtINR(bill.tds)], ["Net Payable", fmtINR(bill.netAmount)]].map(([k, v]) => (
+              {[["Work Order", bill.workOrder], ["PO Number", bill.po], ["Vendor/Contractor Bill No.", bill.contractorBillNo],
+              ["Bill Date", fmtDate(bill.billDate)], ["Gross Amount", fmtINR(bill.grossAmount)],
+              ["Other Deductions", "- " + fmtINR(bill.otherDeductions)], ["Net Payable", fmtINR(bill.netAmount)]].map(([k, v]) => (
                 <div key={k} className="flex justify-between"><dt className="text-slate-400">{k}</dt><dd className="font-medium text-right">{v || "—"}</dd></div>
               ))}
             </dl>
@@ -1192,7 +1187,7 @@ const REPORT_TABS = [
   { id: "pending", label: "Pending Bill Report", icon: Clock },
   { id: "ageing", label: "Bill Ageing Report", icon: AlertTriangle },
   { id: "site", label: "Site-Wise Report", icon: Building2 },
-  { id: "contractor", label: "Contractor-Wise Report", icon: Truck },
+  { id: "contractor", label: "Vendor-Wise Report", icon: Truck },
   { id: "monthly", label: "Monthly Bill Report", icon: BarChart3 },
   { id: "payment", label: "Payment Report", icon: IndianRupee },
   { id: "delay", label: "Department/Stage Delay Report", icon: History },
@@ -1278,7 +1273,7 @@ function Reports({ bills, users, canSeePerformance }) {
       {tab === "pending" && <PendingBillReport bills={filteredBills} users={users} />}
       {tab === "ageing" && <AgeingReport bills={filteredBills} />}
       {tab === "site" && <GroupedReport bills={filteredBills} groupKey="site" title="Site-Wise Report" icon={Building2} />}
-      {tab === "contractor" && <GroupedReport bills={filteredBills} groupKey="contractor" title="Contractor-Wise Report" icon={Truck} />}
+      {tab === "contractor" && <GroupedReport bills={filteredBills} groupKey="contractor" title="Vendor-Wise Report" icon={Truck} />}
       {tab === "monthly" && <MonthlyReport bills={filteredBills} />}
       {tab === "payment" && <PaymentReport bills={filteredBills} />}
       {tab === "delay" && <DelayReport bills={filteredBills} />}
@@ -1335,7 +1330,7 @@ function billDelayInfo(bill) {
 }
 
 function BillRegisterReport({ bills, users }) {
-  const cols = ["Bill ID", "Bill No.", "Contractor", "Site", "Type", "Bill Date", "Amount", "Status", "Holder", "Delay Days"];
+  const cols = ["Bill ID", "Bill No.", "Vendor/Contractor", "Site", "Type", "Bill Date", "Amount", "Status", "Holder", "Delay Days"];
   const rows = bills.map(b => {
     const d = billDelayInfo(b);
     const delayCell = !d ? <span className="text-slate-300">—</span> : (
@@ -1353,7 +1348,7 @@ function BillRegisterReport({ bills, users }) {
 
 function PendingBillReport({ bills, users }) {
   const pending = bills.filter(isOpenBill);
-  const cols = ["Bill ID", "Bill No.", "Contractor", "Site", "Stage", "Holder", "Amount", "Received", "Pending Days"];
+  const cols = ["Bill ID", "Bill No.", "Vendor/Contractor", "Site", "Stage", "Holder", "Amount", "Received", "Pending Days"];
   const rows = pending.map(b => {
     const d = daysBetween(b.dateReceived, Date.now());
     return [b.id, b.contractorBillNo || "—", b.contractor, b.site, b.status, holderDisplay(b, users), fmtINR(b.netAmount), fmtDate(b.dateReceived), <span key={b.id} className={d > 15 ? "text-red-600 font-semibold" : d > 7 ? "text-amber-600 font-semibold" : ""}>{d}d</span>];
@@ -1457,7 +1452,7 @@ function MonthlyReport({ bills }) {
 
 function PaymentReport({ bills }) {
   const paid = bills.filter(b => b.payment);
-  const cols = ["Bill ID", "Contractor", "Site", "Approved Amount", "Paid Amount", "Payment Date", "UTR", "Voucher", "Status"];
+  const cols = ["Bill ID", "Vendor/Contractor", "Site", "Approved Amount", "Paid Amount", "Payment Date", "UTR", "Voucher", "Status"];
   const rows = paid.map(b => [b.id, b.contractor, b.site, fmtINR(b.netAmount), fmtINR(b.payment.amount), fmtDate(b.payment.date), b.payment.utr, b.payment.voucher, "Paid"]);
   return <ReportShell title="Payment Report" count={paid.length} onExport={() => downloadCsv("payment-report.csv", cols, paid.map(b => [b.id, b.contractor, b.site, b.netAmount, b.payment.amount, fmtDate(b.payment.date), b.payment.utr, b.payment.voucher, "Paid"]))}>
     <Table cols={cols} rows={rows} />
@@ -1668,7 +1663,7 @@ function ManagementDashboard({ bills, users }) {
             </div>
           )}
         </SectionCard>
-        <SectionCard title="Contractor-wise Outstanding" icon={Truck}>
+        <SectionCard title="Vendor-wise Outstanding" icon={Truck}>
           {contractorWise.length === 0 ? <Empty /> : (
             <div className="max-h-[280px] overflow-y-auto">
               <ResponsiveContainer width="100%" height={Math.max(220, contractorWise.length * 40)}>
@@ -1694,7 +1689,7 @@ function ManagementDashboard({ bills, users }) {
       </div>
 
       <SectionCard title="Top 10 Oldest Pending Bills" icon={AlertTriangle}>
-        <Table cols={["Bill ID", "Contractor", "Site", "Holder", "Amount", "Days Pending"]}
+        <Table cols={["Bill ID", "Vendor/Contractor", "Site", "Holder", "Amount", "Days Pending"]}
           rows={oldest.map(b => [b.id, b.contractor, b.site, holderDisplay(b, users), fmtINR(b.netAmount), <span key={b.id} className="text-red-600 font-semibold">{daysBetween(b.dateReceived, Date.now())}d</span>])} />
       </SectionCard>
     </div>
@@ -1811,11 +1806,11 @@ function ContractorsManager({ contractors, onAdd, onDelete }) {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold" style={{ color: NAVY }}>Contractors</h1>
-        <p className="text-sm text-slate-500">Registered contractors</p>
+        <h1 className="text-2xl font-bold" style={{ color: NAVY }}>Vendors / Contractors</h1>
+        <p className="text-sm text-slate-500">Registered vendors and contractors</p>
       </div>
 
-      <SectionCard title="Add Contractor" icon={PlusCircle}>
+      <SectionCard title="Add Vendor/Contractor" icon={PlusCircle}>
         <form onSubmit={submit} className="grid sm:grid-cols-2 gap-3">
           <Field label="Firm Name" required>
             <input className={inputCls} value={firmName} onChange={(e) => setFirmName(e.target.value)} placeholder="e.g. Everest Construction Co." />
@@ -1834,16 +1829,16 @@ function ContractorsManager({ contractors, onAdd, onDelete }) {
           </Field>
           <div className="sm:col-span-2">
             <button type="submit" className="px-4 py-2.5 rounded-lg text-white text-sm font-semibold" style={{ backgroundColor: NAVY }}>
-              Add Contractor
+              Add Vendor/Contractor
             </button>
           </div>
         </form>
         {error && <div className="text-sm text-red-600 mt-2">{error}</div>}
       </SectionCard>
 
-      <SectionCard title="Contractors" icon={Truck}>
+      <SectionCard title="Vendors / Contractors" icon={Truck}>
         {contractors.length === 0 ? (
-          <Empty text="No contractors yet — add one above." />
+          <Empty text="No vendors/contractors yet — add one above." />
         ) : (
           <ul className="divide-y divide-slate-100">
             {contractors.map((c) => (
@@ -2057,7 +2052,7 @@ function SimpleListPage({ title, sub, items, icon: Icon }) {
 
 function GuidePage() {
   const steps = [
-    ["Contractor submits bill", "Physical/digital bill handed to the Site Billing Engineer."],
+    ["Vendor/Contractor submits bill", "Physical/digital bill handed to the Site Billing Engineer."],
     ["Site Primary Checking", "Site Billing Engineer verifies documents and marks checking complete."],
     ["Runner Boy", "Collects the physical bill and hands it to Admin."],
     ["Admin", "Confirms receipt, verifies documents, forwards to HO."],
@@ -2263,9 +2258,9 @@ export default function App({ user, onLogout }) {
     const registeredBy = profile?.id || null;
     const bill = {
       id, contractor: form.contractor, site: form.site, building: form.building,
-      workOrder: form.workOrder, po: form.po, contractorBillNo: form.contractorBillNo,
-      billType: form.billType, billDate: new Date(form.billDate).getTime(), billPeriod: form.billPeriod,
-      grossAmount: form.grossAmount, gst: form.gst, tds: form.tds, otherDeductions: form.otherDeductions,
+      workOrder: form.workOrder || "", po: form.po || "", contractorBillNo: form.contractorBillNo,
+      billType: form.billType, billDate: new Date(form.billDate).getTime(), billPeriod: form.billPeriod || "",
+      grossAmount: form.grossAmount, gst: Number(form.gst) || 0, tds: Number(form.tds) || 0, otherDeductions: form.otherDeductions,
       netAmount: form.netAmount, dateReceived: now, submittedBy: form.submittedBy || "Site Billing Engineer",
       remarks: form.remarks, documents: form.documents || [], status: "Received at Site",
       history: [{ user: form.submittedBy || "Site Billing Engineer", role: "Site Billing Engineer", date: now, prevStatus: null, newStatus: "Received at Site", remarks: "Bill registered at site." }],
@@ -2463,7 +2458,6 @@ export default function App({ user, onLogout }) {
     setOpenBillId(billId);
   }, []);
 
-  const openBill = bills.find(b => b.id === openBillId);
   // Bootstrap safety: if nobody has been set up as Super Admin yet (with a real
   // login email), the Users page stays open to whoever is logged in, so someone
   // can configure themselves as Super Admin. The moment a Super Admin with an
@@ -2483,20 +2477,21 @@ export default function App({ user, onLogout }) {
   const canManageContractors = !profile || CAN_MANAGE_CONTRACTORS.includes(role);
   const canSeeManagementDashboard = !!profile && CAN_SEE_MANAGEMENT_DASHBOARD.includes(role);
 
-  // What the Dashboard should actually show, per the access table:
-  // - Super Admin / Director: everything.
-  // - Site Billing Engineer: what they registered themselves, PLUS whatever
-  //   is currently assigned to them (covers both "received via transfer" and
-  //   "received back after being rejected", since both land as assignedTo).
-  // - Everyone else (Reception, HO Billing Engineer, Billing Manager,
-  //   Accountant): only what's currently assigned to them.
-  const dashboardBills = useMemo(() => {
+  // Universal visibility rule, applied to BOTH All Bills and the Dashboard,
+  // for everyone except Super Admin/Director: you only see a bill if you
+  // registered it yourself, OR it is currently assigned to you (covers both
+  // "received via transfer" and "received back after being rejected", since
+  // both land as assignedTo). Bills nobody ever sent you stay invisible.
+  const visibleBills = useMemo(() => {
     if (!profile || isSuperAdmin(profile.designation)) return bills;
-    if (role === "site billing engineer") {
-      return bills.filter(b => b.registeredBy === profile.id || b.assignedTo === profile.id);
-    }
-    return bills.filter(b => b.assignedTo === profile.id);
-  }, [bills, profile, role]);
+    return bills.filter(b => b.registeredBy === profile.id || b.assignedTo === profile.id);
+  }, [bills, profile]);
+
+  // Always resolved from the full, unfiltered bill list — so clicking a
+  // notification (including the Accounts delay-warning, which deliberately
+  // surfaces bills NOT assigned to the viewer) always opens correctly,
+  // regardless of what the All Bills list itself is currently showing.
+  const openBill = bills.find(b => b.id === openBillId);
 
   if (!loaded) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Loading BillTrack Pro…</div>;
@@ -2512,10 +2507,10 @@ export default function App({ user, onLogout }) {
       <div className="flex-1 min-w-0 flex flex-col">
         <Header onMenu={() => setSidebarOpen(true)} notifications={notifications} onOpenNotification={handleOpenNotification} userEmail={user?.email} onLogout={onLogout} />
         <main className="flex-1 p-4 sm:p-6 max-w-[1400px] w-full mx-auto">
-          {active === "dashboard" && <Dashboard bills={dashboardBills} setActive={setActive} userEmail={user?.email} />}
+          {active === "dashboard" && <Dashboard bills={visibleBills} setActive={setActive} userEmail={user?.email} />}
           {active === "bills" && !openBill && (
             <AllBills
-              bills={bills} onOpen={setOpenBillId} setActive={setActive} onDelete={handleDeleteBill}
+              bills={visibleBills} onOpen={setOpenBillId} setActive={setActive} onDelete={handleDeleteBill}
               profile={profile} users={users} onAccept={handleAcceptBill} onReject={handleRejectBill} onTransfer={handleTransferBill} onClose={handleCloseBill}
             />
           )}
