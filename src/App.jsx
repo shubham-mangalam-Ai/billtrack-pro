@@ -183,12 +183,17 @@ const CAN_MANAGE_CONTRACTORS = ["super admin", "director", "site billing enginee
 const CAN_SEE_MANAGEMENT_DASHBOARD = ["super admin", "director"];
 
 // Turn-around-time targets (in days) per role, for the Performance report.
+// Everyone is now a flat 7 days. "Billing Manager" wasn't in the latest list
+// — left at its old 3-day target for now; flag to confirm if it should also
+// move to 7.
 const TAT_TARGETS = {
   "site billing engineer": 7,
-  "head office billing engineer": 3,
+  "head office billing engineer": 7,
   "billing manager": 3,
   "accountant": 7,
   "accounts": 7,
+  "admin": 7,
+  "store keeper": 7,
 };
 
 // Is this bill actually sitting with Accounts right now (not just "somewhere
@@ -205,13 +210,22 @@ function isCurrentlyWithAccounts(bill, users) {
 // Can the currently logged-in profile Accept/Reject/Transfer this bill?
 // - Super Admin can always act (keeps things from getting stuck).
 // - If the bill is already assigned to a specific person, only that person can act.
-// - If unassigned, anyone whose designation matches the bill's current role-based
-//   holder (e.g. "Runner", "HO Billing Engineer") can claim it.
+// - Whoever actually registered the bill can always act on it while it's
+//   still unclaimed — regardless of their designation. (currentHolder() is a
+//   generic workflow-stage label like "Site Billing Engineer" left over from
+//   the original fixed pipeline; now that any of several roles — Admin, Site
+//   Reception, Store Keeper, Purchase Officer, etc. — can register a bill,
+//   that label no longer reliably matches the actual registrant's role, so
+//   it must not be the only way to claim a freshly registered bill.)
+// - Otherwise, if unassigned, anyone whose designation matches the bill's
+//   current role-based holder can still claim it (keeps the original
+//   workflow-stage handoff working for bills nobody has personally claimed).
 function canActOnBill(bill, profile) {
   if (!profile) return false;
   if (!isOpenBill(bill)) return false;
   if (isSuperAdmin(profile.designation)) return true;
   if (bill.assignedTo) return bill.assignedTo === profile.id;
+  if (bill.registeredBy && bill.registeredBy === profile.id) return true;
   return rolesMatch(profile.designation, currentHolder(bill));
 }
 
@@ -1557,7 +1571,7 @@ function PerformanceReport({ bills, users }) {
       onExport={() => downloadCsv("performance-tat.csv", cols, stats.map(s => [s.name, s.role, s.billsHandled, s.avgDays, s.target || "", s.target == null ? "" : (s.onTrack ? "On Track" : "Over TAT")]))}
     >
       <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
-        Turn-around-time targets: Site Billing Engineer 7 days · Head Office Billing Engineer 3 days · Billing Manager 3 days · Accountant 7 days.
+        Turn-around-time targets: Site Billing Engineer 7 days · Head Office Billing Engineer 7 days · Accountant 7 days · Admin 7 days · Store Keeper 7 days · Billing Manager 3 days.
         "Avg. Days per Bill" is how long it typically takes that person to act once a bill reaches them.
       </div>
       <Table cols={cols} rows={rows} />
