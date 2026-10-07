@@ -575,7 +575,7 @@ function Header({ onMenu, notifications, onOpenNotification, userEmail, onLogout
 
 /* ------------------------------ Dashboard ------------------------------ */
 
-function Dashboard({ bills, setActive, userEmail }) {
+function Dashboard({ bills, users, setActive, userEmail }) {
   const stats = useMemo(() => {
     const total = bills.length;
     const totalAmt = bills.reduce((s, b) => s + b.netAmount, 0);
@@ -584,11 +584,18 @@ function Dashboard({ bills, setActive, userEmail }) {
     const paid = bills.filter(b => b.status === "Paid");
     const paidAmt = paid.reduce((s, b) => s + b.netAmount, 0);
     const approvedAmt = bills.filter(b => ["Approved", "Sent to Accounts", "Payment Processing", "Paid"].includes(b.status)).reduce((s, b) => s + b.netAmount, 0);
-    const underProcessing = bills.filter(b => b.status === "Payment Processing").reduce((s, b) => s + b.netAmount, 0);
+    // "Under Payment Processing" now reflects the actual Accept/Transfer
+    // workflow: a bill someone in Accounts has personally Accepted (so
+    // they're actively working on releasing payment) but hasn't yet closed
+    // out as Paid — not the old, largely-unused "Payment Processing" status
+    // from the original fixed pipeline.
+    const underProcessingBills = bills.filter(b => isOpenBill(b) && b.awaitingTransfer && isCurrentlyWithAccounts(b, users));
+    const underProcessingCount = underProcessingBills.length;
+    const underProcessingAmt = underProcessingBills.reduce((s, b) => s + b.netAmount, 0);
     const onHold = bills.filter(b => b.status === "On Hold" || b.status === "Payment Hold").length;
     const rejected = bills.filter(b => b.status === "Rejected").length;
-    return { total, totalAmt, pendingAmt, paidAmt, approvedAmt, underProcessing, onHold, rejected };
-  }, [bills]);
+    return { total, totalAmt, pendingAmt, paidAmt, approvedAmt, underProcessingCount, underProcessingAmt, onHold, rejected };
+  }, [bills, users]);
 
   const statusDist = useMemo(() => {
     const map = {};
@@ -615,7 +622,7 @@ function Dashboard({ bills, setActive, userEmail }) {
         <StatCard icon={Clock} label="Pending Amount" value={fmtINR(stats.pendingAmt)} color={AMBER} />
         <StatCard icon={CheckCircle2} label="Total Paid" value={fmtINR(stats.paidAmt)} color="#16A34A" />
         <StatCard icon={CheckCircle2} label="Approved Amount" value={fmtINR(stats.approvedAmt)} color={TEAL} />
-        <StatCard icon={Clock} label="Under Payment Processing" value={fmtINR(stats.underProcessing)} color={AMBER} />
+        <StatCard icon={Clock} label="Under Payment Processing" value={fmtINR(stats.underProcessingAmt)} sub={`${stats.underProcessingCount} bill${stats.underProcessingCount === 1 ? "" : "s"}`} color={AMBER} />
         <StatCard icon={AlertTriangle} label="Bills On Hold" value={stats.onHold} color={RED} />
         <StatCard icon={AlertTriangle} label="Bills Rejected" value={stats.rejected} color={RED} />
       </div>
@@ -2521,7 +2528,7 @@ export default function App({ user, onLogout }) {
       <div className="flex-1 min-w-0 flex flex-col">
         <Header onMenu={() => setSidebarOpen(true)} notifications={notifications} onOpenNotification={handleOpenNotification} userEmail={user?.email} onLogout={onLogout} />
         <main className="flex-1 p-4 sm:p-6 max-w-[1400px] w-full mx-auto">
-          {active === "dashboard" && <Dashboard bills={visibleBills} setActive={setActive} userEmail={user?.email} />}
+          {active === "dashboard" && <Dashboard bills={visibleBills} users={users} setActive={setActive} userEmail={user?.email} />}
           {active === "bills" && !openBill && (
             <AllBills
               bills={visibleBills} onOpen={setOpenBillId} setActive={setActive} onDelete={handleDeleteBill}
