@@ -354,6 +354,40 @@ function makeBillId(seq) {
   return `ML-2026-${String(seq).padStart(6, "0")}`;
 }
 
+// The next bill number — based on the highest existing sequence number
+// actually in use, not just bills.length. Using .length broke down after any
+// bill got deleted (the count drops but earlier IDs are still "used"), and
+// it's also what let two near-simultaneous registrations land on the exact
+// same ID (both read the same stale .length before either had saved). This
+// doesn't fully close that race by itself, but combined with disabling the
+// Register button the instant it's clicked, it removes the two realistic
+// ways that happened in practice.
+function nextBillSeq(bills) {
+  let max = 0;
+  bills.forEach(b => {
+    const m = /ML-\d{4}-(\d+)/.exec(b.id || "");
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  });
+  return max + 1;
+}
+
+// Drops any extra copies sharing the same Bill ID, keeping only the first
+// one seen — this is what makes sure duplicates (however they got into
+// storage, e.g. from the rapid-click bug above) never actually show up.
+function dedupeBillsById(bills) {
+  const seen = new Set();
+  const result = [];
+  for (const b of bills) {
+    if (seen.has(b.id)) continue;
+    seen.add(b.id);
+    result.push(b);
+  }
+  return result;
+}
+
 function seedBills() {
   const now = Date.now();
   const day = 86400000;
@@ -674,8 +708,8 @@ function BillMiniList({ bills }) {
   if (bills.length === 0) return <Empty />;
   return (
     <div className="divide-y divide-slate-100">
-      {bills.map(b => (
-        <div key={b.id} className="py-3 flex items-center justify-between gap-3">
+      {bills.map((b, idx) => (
+        <div key={b.id + "_" + idx} className="py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="font-mono text-xs font-semibold" style={{ color: NAVY }}>{b.id}</div>
             <div className="text-sm text-slate-600 truncate">{b.contractor} · {b.site}</div>
@@ -773,10 +807,10 @@ function AllBills({ bills, onOpen, setActive, onDelete, profile, users, onAccept
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(b => {
+                {filtered.map((b, idx) => {
                   const days = daysBetween(b.dateReceived, Date.now());
                   return (
-                    <tr key={b.id} onClick={() => onOpen(b.id)} className="border-b border-slate-50 last:border-0 hover:bg-slate-50 cursor-pointer">
+                    <tr key={b.id + "_" + idx} onClick={() => onOpen(b.id)} className="border-b border-slate-50 last:border-0 hover:bg-slate-50 cursor-pointer">
                       <td className="px-5 py-3 font-mono text-xs font-semibold" style={{ color: NAVY }}>{b.id}</td>
                       <td className="px-5 py-3">
                         <div className="font-medium text-slate-700">{b.contractor}</div>
@@ -833,6 +867,14 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
   const [files, setFiles] = useState([]); // File objects, not yet uploaded
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Separate from `uploading` (which only covers the file-upload step) —
+  // this goes true the instant Submit is clicked, with or without files
+  // attached, so the button is disabled immediately and a rapid double-click
+  // (or an impatient second click while a slow network request is still in
+  // flight) can never fire a second registration. Without this, two clicks
+  // close together could both read the same "next bill number" and both
+  // succeed, creating two bills with the identical ID.
+  const [submitting, setSubmitting] = useState(false);
   const [uploadStatus, setUploadStatus] = useState(""); // shown while uploading
   const fileInputRef = React.useRef(null);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -846,11 +888,13 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (submitting) return; // already in progress — ignore any extra click
     if (!form.contractor || !form.site) {
       setError("Please select a Vendor/Contractor and a Site before submitting.");
       return;
     }
     setError("");
+    setSubmitting(true);
 
     let uploadedDocs = [];
     if (files.length > 0) {
@@ -869,6 +913,7 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
       } catch (err) {
         setUploading(false);
         setUploadStatus("");
+        setSubmitting(false);
         setError(
           `Couldn't upload "${err.fileName || "a file"}": ${err.message || "unknown error"}. ` +
           `If this keeps happening, check that a Storage bucket named "bill-documents" exists in Supabase (set to public) and try again.`
@@ -980,8 +1025,8 @@ function RegisterBill({ onCreate, nextId, contractors, sites }) {
           </div>
         )}
 
-        <button type="submit" disabled={uploading} className="w-full sm:w-auto px-6 py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-60" style={{ backgroundColor: NAVY }}>
-          {uploading ? "Uploading…" : "Register Bill at Site"}
+        <button type="submit" disabled={submitting} className="w-full sm:w-auto px-6 py-3 rounded-xl text-white font-semibold text-sm disabled:opacity-60" style={{ backgroundColor: NAVY }}>
+          {uploading ? "Uploading…" : submitting ? "Registering…" : "Register Bill at Site"}
         </button>
       </form>
     </div>
@@ -2116,7 +2161,16 @@ export default function App({ user, onLogout }) {
       try {
         const res = await storage.get("billtrack:bills", true);
         if (res && res.value) {
-          setBills(JSON.parse(res.value));
+          const parsed = JSON.parse(res.value);
+          const deduped = dedupeBillsById(parsed);
+          setBills(deduped);
+          // Clean the duplicates out of Supabase itself too, so this isn't
+          // just a display-side fix — the next person to load the app
+          // (and this same session, if it reloads) sees them already gone
+          // for good, not silently re-filtered every time.
+          if (deduped.length !== parsed.length) {
+            await storage.set("billtrack:bills", JSON.stringify(deduped), true);
+          }
         } else {
           const seeded = seedBills();
           setBills(seeded);
@@ -2273,7 +2327,7 @@ export default function App({ user, onLogout }) {
   }, [users, user]);
 
   const handleCreate = useCallback((form) => {
-    const nextSeq = bills.length + 1;
+    const nextSeq = nextBillSeq(bills);
     const id = makeBillId(nextSeq);
     const now = Date.now();
     const registeredBy = profile?.id || null;
@@ -2541,7 +2595,7 @@ export default function App({ user, onLogout }) {
               profile={profile} users={users} onAccept={handleAcceptBill} onReject={handleRejectBill} onTransfer={handleTransferBill} onClose={handleCloseBill}
             />
           )}
-          {active === "new-bill" && canRegisterBills && <RegisterBill onCreate={handleCreate} nextId={makeBillId(bills.length + 1)} contractors={contractors} sites={projects} />}
+          {active === "new-bill" && canRegisterBills && <RegisterBill onCreate={handleCreate} nextId={makeBillId(nextBillSeq(bills))} contractors={contractors} sites={projects} />}
           {active === "reports" && canSeeReports && <Reports bills={bills} users={users} canSeePerformance={canSeeManagementDashboard} />}
           {active === "management" && canSeeManagementDashboard && <ManagementDashboard bills={bills} users={users} />}
           {active === "users" && canSeeUsers && <UsersManager users={users} onAdd={addUser} onDelete={deleteUser} onSendReset={sendPasswordReset} currentUserEmail={user?.email} superAdminConfigured={superAdminConfigured} />}
