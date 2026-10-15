@@ -2233,6 +2233,30 @@ export default function App({ user, onLogout }) {
     try { await storage.set("billtrack:bills", JSON.stringify(next), true); } catch (e) { console.error("Failed to save bills:", e); }
   }, []);
 
+  // Every bill mutation (Accept/Reject/Transfer/Close/delete/create/etc.)
+  // goes through this instead of reading the component's own `bills` state
+  // directly. With several people using the app at once, each browser tab
+  // holds its own in-memory copy of all bills, which goes stale the moment
+  // ANYONE else changes ANYTHING — and persist() always writes the FULL
+  // array, so saving from a stale copy would silently undo whatever that
+  // other person just did (this is what made a transferred bill appear to
+  // "come back to the sender" on its own: the sender's tab was sitting on an
+  // older snapshot and some unrelated action of theirs re-saved it). Pulling
+  // the latest data from Supabase immediately before applying each change
+  // closes that gap — the mutation is always applied on top of what's
+  // actually there right now, not what this tab last happened to load.
+  const withFreshBills = useCallback(async (mutate) => {
+    let latest = bills;
+    try {
+      const res = await storage.get("billtrack:bills", true);
+      if (res && res.value) latest = dedupeBillsById(JSON.parse(res.value));
+    } catch (e) {
+      console.error("Failed to refresh bills before saving — proceeding with the local copy:", e);
+    }
+    const next = mutate(latest);
+    await persist(next);
+  }, [bills, persist]);
+
   const persistProjects = useCallback(async (next) => {
     setProjects(next);
     try { await storage.set("billtrack:projects", JSON.stringify(next), true); } catch (e) { console.error("Failed to save projects:", e); }
@@ -2326,33 +2350,37 @@ export default function App({ user, onLogout }) {
     return users.find(u => u.email && u.email.toLowerCase() === user.email.toLowerCase()) || null;
   }, [users, user]);
 
-  const handleCreate = useCallback((form) => {
-    const nextSeq = nextBillSeq(bills);
-    const id = makeBillId(nextSeq);
+  const handleCreate = useCallback(async (form) => {
     const now = Date.now();
     const registeredBy = profile?.id || null;
-    const bill = {
-      id, contractor: form.contractor, site: form.site, building: form.building,
-      workOrder: form.workOrder || "", po: form.po || "", contractorBillNo: form.contractorBillNo,
-      billType: form.billType, billDate: new Date(form.billDate).getTime(), billPeriod: form.billPeriod || "",
-      grossAmount: form.grossAmount, gst: Number(form.gst) || 0, tds: Number(form.tds) || 0, otherDeductions: form.otherDeductions,
-      netAmount: form.netAmount, dateReceived: now, submittedBy: form.submittedBy || "Site Billing Engineer",
-      remarks: form.remarks, documents: form.documents || [], status: "Received at Site",
-      history: [{ user: form.submittedBy || "Site Billing Engineer", role: "Site Billing Engineer", date: now, prevStatus: null, newStatus: "Received at Site", remarks: "Bill registered at site." }],
-      payment: null, assignedTo: null, awaitingTransfer: false,
-      registeredBy,
-      // Seed the chain with whoever registered this bill — this is what
-      // guarantees only they can ever give it a final, no-appeal reject.
-      assignmentChain: registeredBy ? [registeredBy] : [],
-    };
-    persist([bill, ...bills]);
-    setOpenBillId(id);
+    let newId = null;
+    await withFreshBills((latest) => {
+      const nextSeq = nextBillSeq(latest);
+      const id = makeBillId(nextSeq);
+      newId = id;
+      const bill = {
+        id, contractor: form.contractor, site: form.site, building: form.building,
+        workOrder: form.workOrder || "", po: form.po || "", contractorBillNo: form.contractorBillNo,
+        billType: form.billType, billDate: new Date(form.billDate).getTime(), billPeriod: form.billPeriod || "",
+        grossAmount: form.grossAmount, gst: Number(form.gst) || 0, tds: Number(form.tds) || 0, otherDeductions: form.otherDeductions,
+        netAmount: form.netAmount, dateReceived: now, submittedBy: form.submittedBy || "Site Billing Engineer",
+        remarks: form.remarks, documents: form.documents || [], status: "Received at Site",
+        history: [{ user: form.submittedBy || "Site Billing Engineer", role: "Site Billing Engineer", date: now, prevStatus: null, newStatus: "Received at Site", remarks: "Bill registered at site." }],
+        payment: null, assignedTo: null, awaitingTransfer: false,
+        registeredBy,
+        // Seed the chain with whoever registered this bill — this is what
+        // guarantees only they can ever give it a final, no-appeal reject.
+        assignmentChain: registeredBy ? [registeredBy] : [],
+      };
+      return [bill, ...latest];
+    });
+    setOpenBillId(newId);
     setActive("bills");
-  }, [bills, persist, profile]);
+  }, [withFreshBills, profile]);
 
-  const handleTransition = useCallback((billId, toStatus, remarks) => {
+  const handleTransition = useCallback(async (billId, toStatus, remarks) => {
     const now = Date.now();
-    const next = bills.map(b => {
+    await withFreshBills((latest) => latest.map(b => {
       if (b.id !== billId) return b;
       const updated = {
         ...b, status: toStatus,
@@ -2362,18 +2390,17 @@ export default function App({ user, onLogout }) {
         updated.payment = { date: now, amount: b.netAmount, utr: "UTR" + Math.floor(Math.random() * 900000 + 100000), txn: "TXN" + Math.floor(Math.random() * 900000), voucher: "VCH-" + Math.floor(Math.random() * 9000 + 1000), mode: "NEFT", bankDetails: "HDFC Bank - 00231", remarks: remarks || "Payment released." };
       }
       return updated;
-    });
-    persist(next);
-  }, [bills, persist, user]);
+    }));
+  }, [withFreshBills, user]);
 
-  const handleDeleteBill = useCallback((billId) => {
-    persist(bills.filter(b => b.id !== billId));
-  }, [bills, persist]);
+  const handleDeleteBill = useCallback(async (billId) => {
+    await withFreshBills((latest) => latest.filter(b => b.id !== billId));
+  }, [withFreshBills]);
 
-  const handleAcceptBill = useCallback((billId) => {
+  const handleAcceptBill = useCallback(async (billId) => {
     if (!profile) return;
     const now = Date.now();
-    persist(bills.map(b => {
+    await withFreshBills((latest) => latest.map(b => {
       if (b.id !== billId) return b;
       const chain = Array.isArray(b.assignmentChain) ? [...b.assignmentChain] : (b.assignedTo ? [b.assignedTo] : []);
       if (chain[chain.length - 1] !== profile.id) chain.push(profile.id);
@@ -2385,17 +2412,17 @@ export default function App({ user, onLogout }) {
         history: [...b.history, { user: profile.name, role: profile.designation, date: now, prevStatus: b.status, newStatus: b.status, remarks: `Accepted by ${profile.name} (${profile.designation}).` }],
       };
     }));
-  }, [bills, persist, profile]);
+  }, [withFreshBills, profile]);
 
   // Rejecting sends the bill back to whoever handed it to this person (the
   // previous holder in the chain), so THEY get Accept/Reject again — it
   // isn't instantly terminal. Only the bill's original registrant (whoever
   // used "Register New Bill") can ever give it a final, no-appeal reject —
   // see wouldBeFinalReject() above for exactly how that's decided.
-  const handleRejectBill = useCallback((billId, remarks) => {
+  const handleRejectBill = useCallback(async (billId, remarks) => {
     if (!profile) return;
     const now = Date.now();
-    persist(bills.map(b => {
+    await withFreshBills((latest) => latest.map(b => {
       if (b.id !== billId) return b;
 
       // Bill was never actually claimed (nobody accepted it yet), and the
@@ -2437,14 +2464,14 @@ export default function App({ user, onLogout }) {
         history: [...b.history, { user: profile.name, role: profile.designation, date: now, prevStatus: b.status, newStatus: b.status, kind: "rejected_bounce", remarks: `Rejected by ${profile.name} (${profile.designation}) — sent back to ${prevHolder ? `${prevHolder.name} (${prevHolder.designation})` : "the previous holder"} for review. Reason: ${remarks || "No reason given."}` }],
       };
     }));
-  }, [bills, persist, profile, users]);
+  }, [withFreshBills, profile, users]);
 
-  const handleTransferBill = useCallback((billId, targetUserId) => {
+  const handleTransferBill = useCallback(async (billId, targetUserId) => {
     if (!profile) return;
     const target = users.find(u => u.id === targetUserId);
     if (!target) return;
     const now = Date.now();
-    persist(bills.map(b => {
+    await withFreshBills((latest) => latest.map(b => {
       if (b.id !== billId) return b;
       const chain = Array.isArray(b.assignmentChain) ? [...b.assignmentChain] : (b.assignedTo ? [b.assignedTo] : []);
       chain.push(target.id);
@@ -2456,14 +2483,14 @@ export default function App({ user, onLogout }) {
         history: [...b.history, { user: profile.name, role: profile.designation, date: now, prevStatus: b.status, newStatus: b.status, remarks: `Transferred to ${target.name} (${target.designation}) by ${profile.name}.` }],
       };
     }));
-  }, [bills, persist, profile, users]);
+  }, [withFreshBills, profile, users]);
 
   // Accounts is the end of the line — after they Accept, there's no one left
   // to transfer to. Closing requires a remark, and finalizes the bill as Paid.
-  const handleCloseBill = useCallback((billId, remarks) => {
+  const handleCloseBill = useCallback(async (billId, remarks) => {
     if (!profile) return;
     const now = Date.now();
-    persist(bills.map(b => {
+    await withFreshBills((latest) => latest.map(b => {
       if (b.id !== billId) return b;
       const payment = {
         date: now, amount: b.netAmount,
@@ -2481,7 +2508,7 @@ export default function App({ user, onLogout }) {
         history: [...b.history, { user: profile.name, role: profile.designation, date: now, prevStatus: b.status, newStatus: "Paid", remarks }],
       };
     }));
-  }, [bills, persist, profile]);
+  }, [withFreshBills, profile]);
 
   const notifications = useMemo(() => {
     if (!profile) return [];
