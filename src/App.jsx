@@ -729,13 +729,20 @@ function BillMiniList({ bills }) {
 function AllBills({ bills, onOpen, setActive, onDelete, profile, users, onAccept, onReject, onTransfer, onClose }) {
   const [q, setQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [projectFilter, setProjectFilter] = useState("All");
   const [showFilters, setShowFilters] = useState(false);
+
+  const projectOptions = useMemo(() => {
+    const names = Array.from(new Set(bills.map(b => b.site).filter(Boolean))).sort();
+    return ["All", ...names];
+  }, [bills]);
 
   const filtered = bills.filter(b => {
     const matchQ = !q || [b.id, b.contractor, b.contractorBillNo, b.workOrder, b.po, b.site, b.status]
       .join(" ").toLowerCase().includes(q.toLowerCase());
     const matchStatus = statusFilter === "All" || b.status === statusFilter;
-    return matchQ && matchStatus;
+    const matchProject = projectFilter === "All" || b.site === projectFilter;
+    return matchQ && matchStatus && matchProject;
   });
 
   const exportCsv = () => {
@@ -772,14 +779,19 @@ function AllBills({ bills, onOpen, setActive, onDelete, profile, users, onAccept
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
-        <div className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by Bill ID, Vendor/Contractor, Bill Number, Work Order, PO, Site, Status..."
-            className={inputCls + " pl-9"} />
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by Bill ID, Vendor/Contractor, Bill Number, Work Order, PO, Site, Status..."
+              className={inputCls + " pl-9"} />
+          </div>
+          <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} className={inputCls + " sm:w-56"}>
+            {projectOptions.map(p => <option key={p} value={p}>{p === "All" ? "All Projects" : p}</option>)}
+          </select>
         </div>
         {showFilters && (
           <div className="flex flex-wrap gap-2 pt-1">
-            {["All", ...WORKFLOW.map(w => w.status), "Query Raised", "Returned to Contractor", "Rejected", "On Hold", "Payment Hold"].map(s => (
+            {["All", "Paid", "Rejected"].map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium border ${statusFilter === s ? "text-white border-transparent" : "text-slate-600 border-slate-300"}`}
                 style={statusFilter === s ? { backgroundColor: NAVY } : {}}>
